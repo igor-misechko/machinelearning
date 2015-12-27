@@ -220,4 +220,6 @@ grid.arrange(p1, p2, nrow=2)
 
 ##Resume
 We had builded two models that allow us to predict the manner in which participant did the exercise. 
-Power of our predictions is 80%.
+Power of our predictions is 80%.  
+  
+---
