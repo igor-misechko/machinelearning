@@ -5,18 +5,219 @@ date: "21 december 2015"
 output: html_document
 ---
 
-This is a New Test Document.
 
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r}
-summary(cars)
-```
-
-You can also embed plots, for example:
+ 
+##Summary  
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways.  
+The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set.  
 
 ```{r, echo=FALSE}
-plot(cars)
+#load used packages
+packages <- c("ggplot2", "survival", "caret", "data.table", "tidyr", "lubridate", "gbm", "randomForest", "plyr", "dplyr", "gridExtra", "knitr")
+packages <- lapply(packages, FUN = function(x) {
+     if (!require(x, character.only = T, quietly = T, warn.conflicts =  F)) {
+          install.packages(x)
+          library(x, character.only = T, quietly = T, warn.conflicts =  F, verbose = F, logical.return = F)
+     }
+})
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+##Load data and tidyng data
+The anlyzing data load from [there](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv).   
+Process of research and Dataset described by [link there](http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf).  
+```{r, echo=FALSE,cache=TRUE}
+fileDest <- "pml-training.csv"
+fileUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+download.file(fileUrl, fileDest)
+pmltr0 <- read.table(fileDest, header = TRUE, sep = ",", dec = ".", na.strings = c("NA","#DIV/0!","(Other)"))
+#pmltr <- pmltr0
+pmltr0$cvtd_timestamp <- dmy_hm(format(pmltr0$cvtd_timestamp))
+rmCol <- c("X",
+            "raw_timestamp_part_1", 
+            "raw_timestamp_part_2",
+            "user_name",
+            "new_window",
+           "num_window")
+pmltr0 <- data.table(select(pmltr0, -one_of(rmCol)))
+#dim(pmltr0)
+```
+
+##Pre-Processing
+Process of pre-processing include 3 steps:  
+1) Remove variables with near zero variances  
+2) Remove highly corelated variables  
+3) Remove non-complete cases and non-used variables  
+  
+  
+```{r, echo=FALSE}
+#filtered NearZero
+nzv <- nearZeroVar(pmltr0)
+pmltr1 <- select(pmltr0, -nzv)
+```
+
+
+```{r, echo=FALSE}
+pmltr <- filter(pmltr1, complete.cases(pmltr1))
+```
+After remove variables with near zero variances final dataset has dimensions: `r dim(pmltr)`.  
+This is __Data set #1__, that we include to analysis.  
+  
+  
+```{r, echo=FALSE}
+descrCor <- cor(select(pmltr, -one_of(c("classe", "user_name", "cvtd_timestamp"))))
+highlyCorDescr <- findCorrelation(descrCor, cutoff = .75)
+pmltr2 <- select(pmltr, -highlyCorDescr)
+```
+After remove highly corelated variables final dataset has dimensions: `r dim(pmltr2)`.  
+This is __Data set #2__, that we include to analysis.  
+
+
+##Split data into train and test set  
+Data splitted in proportion of 75% for train data set and 25% for testing.
+Data splitted for each data set.
+```{r, echo=FALSE,cache=TRUE}
+set.seed(107)
+inTrain <- createDataPartition(y = pmltr1$classe,
+                               p = .75,
+                               list = FALSE)
+trn1 <- filter(pmltr, inTrain)
+tst1 <- filter(pmltr, -inTrain)
+trn2 <- filter(pmltr2, inTrain)
+tst2 <- filter(pmltr2, -inTrain)
+```
+
+##Biuld model fit  
+
+```{r, echo=FALSE}
+fitControl <- trainControl(## 10-fold CV
+                           method = "repeatedcv",
+                           number = 10,
+                           allowParallel=TRUE,
+                           ## repeated ten times
+                           repeats = 10)
+```
+
+###Recursive Partitioning (Predicting with trees)
+Building model fit with Data set #1  
+```{r, echo=FALSE,cache=TRUE}
+rpartFit1 <- train(classe ~ .,method="rpart",data=trn1)
+confusionMatrix(tst1$classe,predict(rpartFit1,tst1))
+```
+Building model fit with Data set #2  
+```{r, echo=FALSE,cache=TRUE}
+rpartFit2 <- train(classe ~ .,method="rpart",data=trn2)
+confusionMatrix(tst2$classe,predict(rpartFit2,tst2))
+```
+
+###Boosting algorithm (GBM - boosting with trees)  
+Building model fit with Data set #1
+```{r, echo=FALSE,cache=TRUE}
+set.seed(825)
+gbmFit1 <- train(classe ~ ., data = trn1,
+                 method = "gbm",
+                 trControl = fitControl,
+                 ## This last option is actually one
+                 ## for gbm() that passes through
+                 verbose = FALSE)
+
+gbmPred1 <- predict(gbmFit1,newdata=tst1)
+confusionMatrix(tst1$classe,predict(gbmFit1,tst1))
+```
+
+Building model fit with Data set #2
+```{r, echo=FALSE,cache=TRUE}
+gbmFit2 <- train(classe ~ ., data = trn2,
+                 method = "gbm",
+                 trControl = fitControl,
+                 ## This last option is actually one
+                 ## for gbm() that passes through
+                 verbose = FALSE)
+
+gbmPred2 <- predict(gbmFit2,newdata=tst2)
+confusionMatrix(tst2$classe,predict(gbmFit2,tst2))
+```
+
+###Random Forests algorithm  
+Building model fit with Data set #1  
+```{r forest, echo=FALSE, fig.height=4,fig.width=4,cache=TRUE}
+rfFit1 <- train(classe ~ .,data = trn1,method="rf",trControl = fitControl,prox=TRUE)
+#rfFit1
+rfPred1 <- predict(rfFit1,tst1)
+#table(pred1,tst1$classe)
+confusionMatrix(tst1$classe,predict(rfFit1,tst1))
+
+#rfFit2
+```
+Building model fit with Data set #2   
+```{r predForest, echo=FALSE, dependson="centers",fig.height=4,fig.width=4,cache=TRUE}
+rfFit2 <- train(classe ~ .,data = trn2,method="rf",trControl = fitControl,prox=TRUE)
+
+rfPred2 <- predict(rfFit2,tst2)
+#table(pred2,tst2$classe)
+confusionMatrix(tst2$classe,predict(rfFit2,tst2))
+```
+
+##Comparing results and plotting
+In table below include results for 3 methods in two dataset.   
+```{r, echo=FALSE}
+Rpart <- c(0.44,0.44)
+GBM <- c(0.80,0.76)
+Random.Forests <- c(0.80,0.78)
+m2 <- (rbind(Rpart,GBM,Random.Forests))
+colnames(m2) <- c("Data set #1", "Data set #2")
+kable(m2)
+```
+  
+As we can see the best Accuracy is for Random forests and GBM with Data set #1 (removing variable with near zero variances).  
+But Random forests have better results for Data set #2.  
+Perhaps we need try some other parameters that allow us get better results.   
+
+Now compare variables importance for two methods: GBM and Random Forests.  
+```{r plotGBM, echo=FALSE, fig.width=8, fig.height=6}
+gbmImp <- varImp(gbmFit1, scale = FALSE)
+p1 <- plot(gbmImp, top = 20,  main = "Plotting GBM variable importance")
+
+rfImp <- varImp(rfFit1, scale = FALSE)
+p2 <- plot(rfImp, top = 20,  main = "Plotting Random Forest variable importance")
+grid.arrange(p1, p2, ncol=2)
+```
+    
+GBM have one variavle that stand out, maybe there needed normalisation in next iteration.   
+  
+Also compare two most importance variables for GBM and Random Forests with Data set #1.   
+```{r, echo=FALSE}
+StatChull <- ggproto("StatChull", Stat,
+  compute_group = function(data, scales) {
+    data[chull(data$x, data$y), , drop = FALSE]
+  },
+  
+  required_aes = c("x", "y")
+)
+
+stat_chull <- function(mapping = NULL, data = NULL, geom = "polygon",
+                       position = "identity", na.rm = FALSE, show.legend = NA, 
+                       inherit.aes = TRUE, ...) {
+  layer(
+    stat = StatChull, data = data, mapping = mapping, geom = geom, 
+    position = position, show.legend = show.legend, inherit.aes = inherit.aes,
+    params = list(na.rm = na.rm, ...)
+  )
+}
+```
+
+```{r, echo=FALSE, fig.width=8, fig.height=6}
+p1 <- ggplot(trn1, aes(avg_roll_dumbbell, var_roll_belt, colour = classe)) + 
+  geom_point() + 
+  stat_chull(fill = NA) +
+  labs(title="Classes of two most importance variable in GBM")
+
+p2 <- ggplot(trn1, aes(avg_roll_dumbbell, stddev_roll_belt, colour = classe)) + 
+  geom_point() + 
+  stat_chull(fill = NA) +
+  labs(title="Classes of two most importance variable in Random Forest")
+grid.arrange(p1, p2, nrow=2)
+```
+
+##Resume
+We had builded two models that allow us to predict the manner in which participant did the exercise. 
+Power of our predictions is 80%.
