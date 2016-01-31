@@ -9,183 +9,288 @@ output: html_document
  
 ##Summary  
 Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, your goal will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways.  
-The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set.  
+The goal of our project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set.  
 
-```{r, echo=FALSE}
-#load used packages
-packages <- c("ggplot2", "survival", "caret", "data.table", "tidyr", "lubridate", "gbm", "randomForest", "plyr", "dplyr", "gridExtra", "knitr")
+##Load used packages
+```{r, echo=TRUE}
+packages <- c("ggplot2", "caret", "data.table", "dplyr", "randomForest", "knitr", "doParallel", "dummies")
 packages <- lapply(packages, FUN = function(x) {
      if (!require(x, character.only = T, quietly = T, warn.conflicts =  F)) {
           install.packages(x)
-          library(x, character.only = T, quietly = T, warn.conflicts =  F, verbose = F, logical.return = F)
+          suppressWarnings(library(x, character.only = T, quietly = T, warn.conflicts =  F, verbose = F, logical.return = F))
      }
 })
 ```
 
-##Load data and tidyng data
-The anlyzing data load from [there](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv).   
-Process of research and Dataset described by [link there](http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf).  
-```{r, echo=FALSE,cache=TRUE}
+##Load and read data
+The anlyzing data load from:  
+ - Training dataset are [there](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv).  
+ - Testing dataset are [there](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv).  
+Process of collecting data in dataset described by [link there](http://groupware.les.inf.puc-rio.br/public/papers/2013.Velloso.QAR-WLE.pdf).  
+```{r, echo=TRUE,cache=TRUE}
+#Training dataset
 fileDest <- "pml-training.csv"
 fileUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
 download.file(fileUrl, fileDest)
-pmltr0 <- read.table(fileDest, header = TRUE, sep = ",", dec = ".", na.strings = c("NA","#DIV/0!","(Other)"))
-#pmltr <- pmltr0
-pmltr0$cvtd_timestamp <- dmy_hm(format(pmltr0$cvtd_timestamp))
+pmltr <- read.table(fileDest, header = TRUE, sep = ",", dec = ".", na.strings = c("NA","#DIV/0!","(Other)"))
+pmltr0 <- pmltr
+#Test dataset
+fileDest <- "pml-testing.csv"
+fileUrl <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+download.file(fileUrl, fileDest)
+test <- read.table(fileDest, header = TRUE, sep = ",", dec = ".", na.strings = c("NA","#DIV/0!","(Other)"))
+```
+Train dataset has dimensions: `r dim(pmltr)`.  
+
+----
+
+##Pre-Processing  
+Process of pre-processing include 4 steps:  
+1) Remove non-complete cases and non-used variables  
+2) Remove variables with near zero variances  
+3) Check for highly corelated variables  
+4) Check for linear dependencies    
+  
+  First we need to check for missing values (NA).  
+```{r}
+anyNA(pmltr)
+```
+Dataset include NA values. We need to remove variables with NA values and try to reduce number of variables.  
+
+```{r, echo=T,cache=TRUE}
+isna <- apply(pmltr, 2, anyNA)
+nms <- names(pmltr0)
+nms <- data.frame(cbind(nms, as.character(isna)))
+nms <- filter(nms, V2 == TRUE)
+pmltr0 <- select(pmltr0, -one_of(as.character(nms$nms)))
+test0 <- select(test, -one_of(as.character(nms$nms)))
+```
+After remove non-complete variables our dataset has dimensions: `r dim(pmltr0)`.  
+
+
+Now we try to make some different dataset and build model fit with their.  
+```{r, echo=TRUE,cache=TRUE}
 rmCol <- c("X",
             "raw_timestamp_part_1", 
             "raw_timestamp_part_2",
+            "cvtd_timestamp",
             "user_name",
             "new_window",
            "num_window")
-pmltr0 <- data.table(select(pmltr0, -one_of(rmCol)))
-#dim(pmltr0)
+pmltr1 <- data.table(select(pmltr0, -one_of(rmCol)))
+test1 <- data.table(select(test0, -one_of(rmCol)))
 ```
-
-##Pre-Processing
-Process of pre-processing include 3 steps:  
-1) Remove variables with near zero variances  
-2) Remove highly corelated variables  
-3) Remove non-complete cases and non-used variables  
-  
-  
-```{r, echo=FALSE}
-#filtered NearZero
-nzv <- nearZeroVar(pmltr0)
-pmltr1 <- select(pmltr0, -nzv)
-```
-
-
-```{r, echo=FALSE}
-pmltr <- filter(pmltr1, complete.cases(pmltr1))
-```
-After remove variables with near zero variances final dataset has dimensions: `r dim(pmltr)`.  
+After remove first 7 variables final dataset has dimensions: `r dim(pmltr1)`.  
 This is __Data set #1__, that we include to analysis.  
   
   
-```{r, echo=FALSE}
-descrCor <- cor(select(pmltr, -one_of(c("classe", "user_name", "cvtd_timestamp"))))
-highlyCorDescr <- findCorrelation(descrCor, cutoff = .75)
-pmltr2 <- select(pmltr, -highlyCorDescr)
+In second dataset we check for variables with near zero variances  
+```{r, echo=TRUE}
+nzv <- nearZeroVar(pmltr0)
+pmltr2 <- select(pmltr0, -nzv)
+test2 <- select(test0, -nzv)
 ```
-After remove highly corelated variables final dataset has dimensions: `r dim(pmltr2)`.  
+  
+Now we check highly corelated variables   
+    
+```{r, echo=TRUE}
+descrCor <- cor(select(pmltr1, -classe), use="pairwise.complete.obs")
+highlyCorDescr <- findCorrelation(descrCor, cutoff = .70)
+pmltr2 <- select(pmltr2, -highlyCorDescr)
+test2 <- select(test2, -highlyCorDescr)
+```
+
+After remove variables with near zero variances and highly corelated final dataset has dimensions: `r dim(pmltr2)`.  
 This is __Data set #2__, that we include to analysis.  
 
 
-##Split data into train and test set  
+In third dataset we first make a dummy variables from factor variables (except 'classe')  
+```{r, echo=TRUE}
+pmltr3 <- dummy.data.frame(pmltr0, names = c("user_name", "new_window"))
+test3 <- dummy.data.frame(test0, names = c("user_name", "new_window"), omit.constants=F)
+```
+  
+This dataset we check for highly corelated variables too.   
+    
+```{r, echo=TRUE}
+descrCor <- cor(select(pmltr1, -classe), use="pairwise.complete.obs")
+highlyCorDescr <- findCorrelation(descrCor, cutoff = .70)
+pmltr3 <- select(pmltr3, -highlyCorDescr)
+test3 <- select(test3, -highlyCorDescr)
+```
+
+In last we check for Linear dependencies  
+```{r, echo=TRUE}
+tt <- select(pmltr3, -classe)
+comboInfo <- findLinearCombos(tt)
+comboInfo$remove
+```
+There are not variables with linear dependencies.
+
+After make dummy variables and remove highly corelated variables final dataset has dimensions: `r dim(pmltr3)`.  
+This is __Data set #3__, that we include to analysis.  
+
+---  
+
+##Split data into train and validation set  
 Data splitted in proportion of 75% for train data set and 25% for testing.
 Data splitted for each data set.
-```{r, echo=FALSE,cache=TRUE}
+```{r, echo=TRUE,cache=FALSE}
 set.seed(107)
 inTrain <- createDataPartition(y = pmltr1$classe,
                                p = .75,
                                list = FALSE)
-trn1 <- filter(pmltr, inTrain)
-tst1 <- filter(pmltr, -inTrain)
-trn2 <- filter(pmltr2, inTrain)
-tst2 <- filter(pmltr2, -inTrain)
+trn1 <- filter(pmltr1, inTrain)
+vld1 <- filter(pmltr1, -inTrain)
+inTrain2 <- createDataPartition(y = pmltr2$classe,
+                               p = .75,
+                               list = FALSE)
+trn2 <- pmltr2[inTrain2,]
+vld2 <- pmltr2[-inTrain2, ]
+
+inTrain3 <- createDataPartition(y = pmltr3$classe,
+                               p = .75,
+                               list = FALSE)
+trn3 <- pmltr3[inTrain3,]
+vld3 <- pmltr3[-inTrain3, ]
+```
+
+
+```{r detach, echo=FALSE}
+detach("package:dplyr", character.only = TRUE)
 ```
 
 ##Biuld model fit  
 
-```{r, echo=FALSE}
-fitControl <- trainControl(## 10-fold CV
-                           method = "repeatedcv",
-                           number = 10,
-                           allowParallel=TRUE,
-                           ## repeated ten times
-                           repeats = 10)
-```
-
 ###Recursive Partitioning (Predicting with trees)
 Building model fit with Data set #1  
-```{r, echo=FALSE,cache=TRUE}
+```{r rpart1, echo=TRUE,cache=TRUE}
 rpartFit1 <- train(classe ~ .,method="rpart",data=trn1)
-confusionMatrix(tst1$classe,predict(rpartFit1,tst1))
+rpCM1 <- confusionMatrix(vld1$classe,predict(rpartFit1,vld1))
+rpCM1$overall[1]
 ```
+
 Building model fit with Data set #2  
-```{r, echo=FALSE,cache=TRUE}
+```{r rpart2, echo=TRUE,cache=TRUE}
 rpartFit2 <- train(classe ~ .,method="rpart",data=trn2)
-confusionMatrix(tst2$classe,predict(rpartFit2,tst2))
+rpCM2 <- confusionMatrix(vld2$classe,predict(rpartFit2,vld2))
+rpCM2$overall[1]
+```
+
+Building model fit with Data set #3  
+```{r rpart3, echo=TRUE,cache=TRUE}
+rpartFit3 <- train(classe ~ .,method="rpart",data=trn3)
+rpCM3 <- confusionMatrix(vld3$classe,predict(rpartFit3,vld3))
+rpCM3$overall[1]
 ```
 
 ###Boosting algorithm (GBM - boosting with trees)  
 Building model fit with Data set #1
-```{r, echo=FALSE,cache=TRUE}
+```{r gbm1, echo=TRUE,cache=TRUE}
 set.seed(825)
+cl <- makeCluster(detectCores()/2)
+registerDoParallel(cl)
 gbmFit1 <- train(classe ~ ., data = trn1,
                  method = "gbm",
-                 trControl = fitControl,
-                 ## This last option is actually one
-                 ## for gbm() that passes through
+                 trControl=trainControl(method = "cv", number = 4),
                  verbose = FALSE)
-
-gbmPred1 <- predict(gbmFit1,newdata=tst1)
-confusionMatrix(tst1$classe,predict(gbmFit1,tst1))
+stopCluster(cl)
+gbmPred1 <- predict(gbmFit1,newdata=vld1)
+gbmCM1 <- confusionMatrix(vld1$classe,predict(gbmFit1,vld1))
+gbmCM1$overall[1]
 ```
 
 Building model fit with Data set #2
-```{r, echo=FALSE,cache=TRUE}
+```{r gbm2, echo=TRUE,cache=TRUE}
+set.seed(825)
+cl <- makeCluster(detectCores()/2)
+registerDoParallel(cl)
 gbmFit2 <- train(classe ~ ., data = trn2,
                  method = "gbm",
-                 trControl = fitControl,
-                 ## This last option is actually one
-                 ## for gbm() that passes through
+                 trControl=trainControl(method = "cv", number = 4),
                  verbose = FALSE)
+stopCluster(cl)
+gbmPred2 <- predict(gbmFit2,newdata=vld2)
+gbmCM2 <- confusionMatrix(vld2$classe,predict(gbmFit2,vld2))
+gbmCM2$overall[1]
+```
 
-gbmPred2 <- predict(gbmFit2,newdata=tst2)
-confusionMatrix(tst2$classe,predict(gbmFit2,tst2))
+Building model fit with Data set #3
+```{r gbm3, echo=TRUE,cache=TRUE}
+set.seed(825)
+cl <- makeCluster(detectCores()/2)
+registerDoParallel(cl)
+gbmFit3 <- train(classe ~ ., data = trn3,
+                 method = "gbm",
+                 trControl=trainControl(method = "cv", number = 4),
+                 verbose = FALSE)
+stopCluster(cl)
+gbmPred3 <- predict(gbmFit3,newdata=vld3)
+gbmCM3 <- confusionMatrix(vld3$classe,predict(gbmFit3,vld3))
+gbmCM3$overall[1]
 ```
 
 ###Random Forests algorithm  
+
 Building model fit with Data set #1  
-```{r forest, echo=FALSE, fig.height=4,fig.width=4,cache=TRUE}
-rfFit1 <- train(classe ~ .,data = trn1,method="rf",trControl = fitControl,prox=TRUE)
-#rfFit1
-rfPred1 <- predict(rfFit1,tst1)
-#table(pred1,tst1$classe)
-confusionMatrix(tst1$classe,predict(rfFit1,tst1))
-
-#rfFit2
+```{r predForest1, echo=TRUE,cache=TRUE}
+cl <- makeCluster(detectCores()/2)
+ registerDoParallel(cl)
+suppressWarnings(rfFit1 <- train(classe ~ .,data = trn1,method="rf", preProcess=c("center", "scale"), trControl=trainControl(method = "cv", number = 4)))
+stopCluster(cl)
+rfCM1 <- confusionMatrix(vld1$classe,predict(rfFit1,vld1))
+rfCM1$overall[1]
 ```
+
 Building model fit with Data set #2   
-```{r predForest, echo=FALSE, dependson="centers",fig.height=4,fig.width=4,cache=TRUE}
-rfFit2 <- train(classe ~ .,data = trn2,method="rf",trControl = fitControl,prox=TRUE)
+```{r predForest2, echo=TRUE,cache=FALSE}
+cl <- makeCluster(detectCores()/2)
+registerDoParallel(cl)
+set.seed(71)
+suppressWarnings(rfFit2 <- train(classe ~ .,data = trn2,method="rf", preProcess=c("BoxCox","center", "scale"), trControl=trainControl(method = "cv", number = 4)))
 
-rfPred2 <- predict(rfFit2,tst2)
-#table(pred2,tst2$classe)
-confusionMatrix(tst2$classe,predict(rfFit2,tst2))
+stopCluster(cl)
+rfPred2 <- predict(rfFit2,vld2)
+rfCM2 <- confusionMatrix(vld2$classe,predict(rfFit2,vld2))
+rfCM2$overall[1]
 ```
+
+Building model fit with Data set #3  
+```{r predForest3, echo=TRUE,cache=TRUE}
+cl <- makeCluster(detectCores()/2)
+registerDoParallel(cl)
+suppressWarnings(rfFit3 <- train(classe ~ .,data = trn3,method="rf", preProcess=c("BoxCox","center", "scale"), trControl=trainControl(method = "cv", number = 4)))
+stopCluster(cl)
+rfCM3 <- confusionMatrix(vld3$classe,predict(rfFit3,vld3))
+rfCM3$overall[1]
+```
+
 
 ##Comparing results and plotting
-In table below include results for 3 methods in two dataset.   
-```{r, echo=FALSE}
-Rpart <- c(0.44,0.44)
-GBM <- c(0.80,0.76)
-Random.Forests <- c(0.80,0.78)
+In table below include results for 3 methods in tree dataset.   
+```{r, echo=TRUE}
+Rpart <- c(rpCM1$overall[1],rpCM2$overall[1],rpCM3$overall[1])
+GBM <- c(gbmCM1$overall[1],gbmCM2$overall[1],gbmCM3$overall[1])
+Random.Forests <- c(rfCM1$overall[1],rfCM2$overall[1],rfCM3$overall[1])
 m2 <- (rbind(Rpart,GBM,Random.Forests))
-colnames(m2) <- c("Data set #1", "Data set #2")
+colnames(m2) <- c("Data set #1", "Data set #2", "Data set #3")
 kable(m2)
 ```
   
-As we can see the best Accuracy is for Random forests and GBM with Data set #1 (removing variable with near zero variances).  
-But Random forests have better results for Data set #2.  
-Perhaps we need try some other parameters that allow us get better results.   
+As we can see the best Accuracy is for Random forests with __Data set #2__ (removing variables with near zero variances and highly corelated).  
+
 
 Now compare variables importance for two methods: GBM and Random Forests.  
-```{r plotGBM, echo=FALSE, fig.width=8, fig.height=6}
-gbmImp <- varImp(gbmFit1, scale = FALSE)
-p1 <- plot(gbmImp, top = 20,  main = "Plotting GBM variable importance")
-
-rfImp <- varImp(rfFit1, scale = FALSE)
+```{r plotGBM, echo=TRUE, fig.width=8, fig.height=6}
+rfImp <- varImp(rfFit2, scale = FALSE)
 p2 <- plot(rfImp, top = 20,  main = "Plotting Random Forest variable importance")
-grid.arrange(p1, p2, ncol=2)
+p2
 ```
     
 GBM have one variavle that stand out, maybe there needed normalisation in next iteration.   
   
 Also compare two most importance variables for GBM and Random Forests with Data set #1.   
-```{r, echo=FALSE}
+```{r, echo=TRUE}
 StatChull <- ggproto("StatChull", Stat,
   compute_group = function(data, scales) {
     data[chull(data$x, data$y), , drop = FALSE]
@@ -205,21 +310,18 @@ stat_chull <- function(mapping = NULL, data = NULL, geom = "polygon",
 }
 ```
 
-```{r, echo=FALSE, fig.width=8, fig.height=6}
-p1 <- ggplot(trn1, aes(avg_roll_dumbbell, var_roll_belt, colour = classe)) + 
-  geom_point() + 
-  stat_chull(fill = NA) +
-  labs(title="Classes of two most importance variable in GBM")
-
-p2 <- ggplot(trn1, aes(avg_roll_dumbbell, stddev_roll_belt, colour = classe)) + 
+```{r, echo=TRUE, fig.width=8, fig.height=6}
+p2 <- ggplot(trn2, aes(roll_belt, num_window, colour = classe)) + 
   geom_point() + 
   stat_chull(fill = NA) +
   labs(title="Classes of two most importance variable in Random Forest")
-grid.arrange(p1, p2, nrow=2)
+p2
 ```
 
 ##Resume
-We had builded two models that allow us to predict the manner in which participant did the exercise. 
-Power of our predictions is 80%.  
+We had builded model that allow us to predict the manner in which participant did the exercise. 
+Power of our predictions is 99%.  
   
----
+----
+
+
